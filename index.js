@@ -1,6 +1,8 @@
 var Accessory, Service, Characteristic, UUIDGen;
 var debug = require('debug')('alarmdecoder');
 var alarms = require('./alarmsystems');
+var redis = require('redis');
+const subscriber = redis.createClient();
 
 module.exports = function(homebridge){
     Accessory = homebridge.platformAccessory;
@@ -28,6 +30,9 @@ class AlarmdecoderPlatform {
         rePlatformType = new RegExp('interlogix|ge|caddx','i');
         if(rePlatformType.exec(this.platformType)) 
             this.alarmSystem = new alarms.Interlogix(log, config);
+	if(this.platformType === 'custom-redis') {
+	  this.alarmSystem = new alarms.CustomRedisAlarm(log, config);
+	}
         if(!this.alarmSystem) {
             this.log('no system specified, assuming Honeywell, please add platformType variable to your config.json');
             this.alarmSystem = new alarms.HoneywellDSC(log, config);
@@ -39,9 +44,10 @@ class AlarmdecoderPlatform {
             this.api.on('didFinishLaunching', ()=>{
                 this.log('Cached Accessories Loaded');
                 this.initPlatform();
-                this.listener = require('http').createServer((req, res)=>this.httpListener(req, res));
-                this.listener.listen(this.port);
-                this.log('listening on port '+this.port);
+		subscriber.on('message', function(channel, message) {
+        	  this._getStateFromAlarm(true, JSON.parse(message));
+		}.bind(this));
+		subscriber.subscribe('alarm_decoder');
             });
         }
     }
@@ -236,9 +242,9 @@ class AlarmdecoderPlatform {
     }
 
     // private method used by registered functions to get state from Alarm
-    async _getStateFromAlarm(report=false) {
+    async _getStateFromAlarm(report=false, publishState) {
         try {
-            await this.alarmSystem.getAlarmState();
+            await this.alarmSystem.getAlarmState(publishState);
         }
         catch (e) {
             this.log(e);
